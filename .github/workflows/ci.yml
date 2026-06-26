@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ops-agent/agent
+        working-directory: agent
     steps:
       - uses: actions/checkout@v4
 
@@ -45,7 +45,7 @@ jobs:
     needs: test
     defaults:
       run:
-        working-directory: ops-agent
+        working-directory: .
     steps:
       - uses: actions/checkout@v4
 
@@ -118,7 +118,7 @@ jobs:
     needs: test
     defaults:
       run:
-        working-directory: ops-agent
+        working-directory: .
     steps:
       - uses: actions/checkout@v4
 
@@ -138,7 +138,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: eval-results
-          path: ops-agent/evaluation/eval_results.csv
+          path: evaluation/eval_results.csv
 
       - name: Enforce quality gate
         run: |
