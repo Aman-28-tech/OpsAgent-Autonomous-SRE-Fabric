@@ -1,0 +1,204 @@
+services:
+  # ──────────────────────────────────────────────────────────────────
+  # Infrastructure Services
+  # ──────────────────────────────────────────────────────────────────
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: opsagent-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"     # Management UI
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - opsagent-net
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: opsagent-prometheus
+    ports:
+      - "9095:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=7d"
+    restart: unless-stopped
+    networks:
+      - opsagent-net
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: opsagent-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=opsagent
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./monitoring/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./monitoring/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    networks:
+      - opsagent-net
+
+  # ──────────────────────────────────────────────────────────────────
+  # Auth Service (Security Layer)
+  # ──────────────────────────────────────────────────────────────────
+  auth:
+    build: ./auth
+    container_name: opsagent-auth
+    ports:
+      - "8010:8000"
+    environment:
+      - JWT_SECRET=${JWT_SECRET:-opsagent-dev-secret-change-in-prod}
+      - JWT_TTL_SECONDS=${JWT_TTL_SECONDS:-300}
+      - LOG_LEVEL=INFO
+    restart: unless-stopped
+    networks:
+      - opsagent-net
+
+  # ──────────────────────────────────────────────────────────────────
+  # MCP Servers (Data Layer)
+  # ──────────────────────────────────────────────────────────────────
+  k8s-mcp:
+    build: ./mcp/k8s
+    container_name: opsagent-k8s-mcp
+    ports:
+      - "8001:8000"
+    environment:
+      - SANDBOX_MODE=${K8S_SANDBOX_MODE:-mock}
+      - JWT_SECRET=${JWT_SECRET:-opsagent-dev-secret-change-in-prod}
+      - LOG_LEVEL=INFO
+    volumes:
+      - ${KUBECONFIG_PATH:-/dev/null}:/root/.kube/config:ro
+    restart: unless-stopped
+    networks:
+      - opsagent-net
+
+  prom-mcp:
+    build: ./mcp/prometheus
+    container_name: opsagent-prom-mcp
+    ports:
+      - "8002:8000"
+    environment:
+      - SANDBOX_MODE=mock
+      - JWT_SECRET=${JWT_SECRET:-opsagent-dev-secret-change-in-prod}
+      - PROMETHEUS_URL=http://prometheus:9090
+      - LOG_LEVEL=INFO
+    restart: unless-stopped
+    networks:
+      - opsagent-net
+
+  github-mcp:
+    build: ./mcp/github
+    container_name: opsagent-github-mcp
+    ports:
+      - "8003:8000"
+    environment:
+      - SANDBOX_MODE=mock
+      - JWT_SECRET=${JWT_SECRET:-opsagent-dev-secret-change-in-prod}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - LOG_LEVEL=INFO
+    restart: unless-stopped
+    networks:
+      - opsagent-net
+
+  jira-mcp:
+    build: ./mcp/jira
+    container_name: opsagent-jira-mcp
+    ports:
+      - "8004:8000"
+    environment:
+      - SANDBOX_MODE=mock
+      - JWT_SECRET=${JWT_SECRET:-opsagent-dev-secret-change-in-prod}
+      - JIRA_BASE_URL=${JIRA_BASE_URL:-https://company.atlassian.net}
+      - JIRA_API_TOKEN=${JIRA_API_TOKEN:-}
+      - JIRA_PROJECT_KEY=${JIRA_PROJECT_KEY:-OPS}
+      - LOG_LEVEL=INFO
+    restart: unless-stopped
+    networks:
+      - opsagent-net
+
+  # ──────────────────────────────────────────────────────────────────
+  # Agent Orchestrator (Logic Layer)
+  # ──────────────────────────────────────────────────────────────────
+  agent:
+    build: ./agent
+    container_name: opsagent-agent
+    ports:
+      - "8000:8000"
+    environment:
+      - K8S_MCP_URL=http://k8s-mcp:8000
+      - PROM_MCP_URL=http://prom-mcp:8000
+      - GITHUB_MCP_URL=http://github-mcp:8000
+      - JIRA_MCP_URL=http://jira-mcp:8000
+      - AUTH_URL=http://auth:8000
+      - JWT_SECRET=${JWT_SECRET:-opsagent-dev-secret-change-in-prod}
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - ALERT_QUEUE_NAME=opsagent.alerts
+      - USE_QUEUE=${USE_QUEUE:-true}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - LLM_MODEL=${LLM_MODEL:-llama-3.3-70b-versatile}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
+      - LANGFUSE_HOST=${LANGFUSE_HOST:-https://cloud.langfuse.com}
+      - LOG_LEVEL=INFO
+    depends_on:
+      - k8s-mcp
+      - prom-mcp
+      - github-mcp
+      - jira-mcp
+      - auth
+      - rabbitmq
+    restart: unless-stopped
+    networks:
+      - opsagent-net
+
+  # ──────────────────────────────────────────────────────────────────
+  # Queue Consumer (Worker Layer — horizontally scalable)
+  # ──────────────────────────────────────────────────────────────────
+  consumer:
+    build: ./agent
+    container_name: opsagent-consumer
+    command: ["python", "queue_consumer.py"]
+    environment:
+      - K8S_MCP_URL=http://k8s-mcp:8000
+      - PROM_MCP_URL=http://prom-mcp:8000
+      - GITHUB_MCP_URL=http://github-mcp:8000
+      - JIRA_MCP_URL=http://jira-mcp:8000
+      - AUTH_URL=http://auth:8000
+      - JWT_SECRET=${JWT_SECRET:-opsagent-dev-secret-change-in-prod}
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - ALERT_QUEUE_NAME=opsagent.alerts
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - LLM_MODEL=${LLM_MODEL:-llama-3.3-70b-versatile}
+      - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY:-}
+      - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY:-}
+      - LANGFUSE_HOST=${LANGFUSE_HOST:-https://cloud.langfuse.com}
+      - LOG_LEVEL=INFO
+    depends_on:
+      - rabbitmq
+      - k8s-mcp
+      - prom-mcp
+      - github-mcp
+      - jira-mcp
+      - auth
+    restart: unless-stopped
+    networks:
+      - opsagent-net
+
+networks:
+  opsagent-net:
+    driver: bridge

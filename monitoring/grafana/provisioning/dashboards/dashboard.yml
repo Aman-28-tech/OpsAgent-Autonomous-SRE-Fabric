@@ -1,0 +1,14 @@
+# ──────────────────────────────────────────────────────────────────
+# Grafana — Dashboard Provisioning Config
+# ──────────────────────────────────────────────────────────────────
+apiVersion: 1
+
+providers:
+  - name: "OpsAgent"
+    orgId: 1
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

@@ -1,0 +1,49 @@
+# ──────────────────────────────────────────────────────────────────
+# Prometheus — Scrape Configuration for OpsAgent
+# ──────────────────────────────────────────────────────────────────
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Agent Orchestrator — the main /metrics endpoint
+  - job_name: "opsagent"
+    static_configs:
+      - targets: ["agent:8000"]
+    metrics_path: /metrics/prometheus
+    scrape_interval: 10s
+
+  # K8s MCP Server
+  - job_name: "k8s-mcp"
+    static_configs:
+      - targets: ["k8s-mcp:8000"]
+    metrics_path: /health
+    scrape_interval: 30s
+
+  # Prometheus MCP Server
+  - job_name: "prom-mcp"
+    static_configs:
+      - targets: ["prom-mcp:8000"]
+    metrics_path: /health
+    scrape_interval: 30s
+
+  # GitHub MCP Server
+  - job_name: "github-mcp"
+    static_configs:
+      - targets: ["github-mcp:8000"]
+    metrics_path: /health
+    scrape_interval: 30s
+
+  # Jira MCP Server
+  - job_name: "jira-mcp"
+    static_configs:
+      - targets: ["jira-mcp:8000"]
+    metrics_path: /health
+    scrape_interval: 30s
+
+  # Auth Service
+  - job_name: "auth"
+    static_configs:
+      - targets: ["auth:8000"]
+    metrics_path: /metrics
+    scrape_interval: 15s

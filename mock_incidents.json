@@ -1,0 +1,103 @@
+[
+    {
+      "id": "INC-001",
+      "type": "OOM",
+      "service": "checkout-service",
+      "description": "High memory alert: checkout-service pod killed with OOMKilled (exit 137).",
+      "expected_symptoms": "Pod checkout-service-7b9d6f4c8-xk2lp in CrashLoopBackOff with OOMKilled exit code 137. Container logs show OutOfMemoryError in SessionCache.loadAll().",
+      "expected_root_cause": "PR #247 by dev-alice@company.com introduced unbounded heap allocation in SessionCache.loadAll() — loads all active cart sessions into memory on startup with no eviction policy. With the cart_sessions table growing, heap exceeded the 512Mi limit.",
+      "expected_commit_sha": "a1b2c3d4e5f6",
+      "expected_remediation": "Revert or patch PR #247. Implement LRU eviction or lazy loading for cart sessions. Consider increasing memory limit as a temporary measure."
+    },
+    {
+      "id": "INC-002",
+      "type": "DEPENDENCY_FAILURE",
+      "service": "api-server",
+      "description": "API server crashing on startup — connection refused to Redis.",
+      "expected_symptoms": "Pod api-server-3d7e1b9a0-zt5hw in CrashLoopBackOff with Error exit code 1. Logs show ConnectionRefusedError to redis:6379.",
+      "expected_root_cause": "PR #251 by dev-charlie@company.com switched from in-process cache to external Redis without retry logic. Self-merged with no review. Redis container was not deployed, causing startup failure.",
+      "expected_commit_sha": "7g8h9i0j1k2l",
+      "expected_remediation": "Deploy a Redis container or add connection retry with exponential backoff. Enforce code review policy — PR was self-merged."
+    },
+    {
+      "id": "INC-003",
+      "type": "OOM",
+      "service": "checkout-service",
+      "description": "Repeated OOM kills on checkout-service after deployment of v2.4.1.",
+      "expected_symptoms": "14 restarts, memory grew linearly from 180Mi to 512Mi over 30 minutes — classic memory leak pattern.",
+      "expected_root_cause": "The loadAll() method in SessionCache.java pre-loads all active sessions without an eviction policy. As the session count grows, memory consumption exceeds the 512Mi limit.",
+      "expected_commit_sha": "a1b2c3d4e5f6",
+      "expected_remediation": "Implement LRU eviction in SessionCache, switch to lazy loading, or paginate the initial query."
+    },
+    {
+      "id": "INC-004",
+      "type": "HIGH_CPU",
+      "service": "checkout-service",
+      "description": "CPU usage spiked to 0.95 cores — 6x above baseline — before pod termination.",
+      "expected_symptoms": "CPU spiked from 0.12 to 0.95 cores over 30 minutes alongside memory growth. Pod terminated with OOMKilled.",
+      "expected_root_cause": "Excessive GC pressure from the memory leak in SessionCache caused CPU to spike as the JVM struggled to reclaim heap space before being OOM-killed.",
+      "expected_commit_sha": "a1b2c3d4e5f6",
+      "expected_remediation": "Fix the memory leak first. CPU will normalise once GC pressure is reduced."
+    },
+    {
+      "id": "INC-005",
+      "type": "HIGH_ERROR_RATE",
+      "service": "checkout-service",
+      "description": "5xx error rate at 42% — 5208 errors out of 12400 requests in the last 30 minutes.",
+      "expected_symptoms": "Error rate spiked from baseline 0.2% to 42%. Pod is in CrashLoopBackOff, causing intermittent 502s from the load balancer.",
+      "expected_root_cause": "The checkout-service pod keeps crashing due to the OOM issue from PR #247. Each crash cycle causes all in-flight requests to fail with 5xx.",
+      "expected_commit_sha": "a1b2c3d4e5f6",
+      "expected_remediation": "Immediately rollback the checkout-service deployment to v2.4.0. Patch the SessionCache before re-deploying v2.4.1."
+    },
+    {
+      "id": "INC-006",
+      "type": "POD_CRASH",
+      "service": "checkout-service",
+      "description": "Pod crash detected — 14 restarts in the last hour.",
+      "expected_symptoms": "Pod status CrashLoopBackOff, exit code 137 (SIGKILL by OOM killer). Kubernetes restart count at 14.",
+      "expected_root_cause": "Unbounded heap allocation in the SessionCache introduced by commit a1b2c3d4e5f6.",
+      "expected_commit_sha": "a1b2c3d4e5f6",
+      "expected_remediation": "Scale down the deployment temporarily. Fix the SessionCache memory leak. Re-deploy with increased memory limit as a safety net."
+    },
+    {
+      "id": "INC-007",
+      "type": "DEPENDENCY_FAILURE",
+      "service": "api-server",
+      "description": "API server unable to start — Redis dependency missing.",
+      "expected_symptoms": "Container logs: 'ConnectionRefusedError: [Errno 111] Connection refused' after 3 retries. Exit code 1.",
+      "expected_root_cause": "PR #251 introduced a hard Redis dependency without ensuring Redis is deployed. No circuit breaker or graceful fallback.",
+      "expected_commit_sha": "7g8h9i0j1k2l",
+      "expected_remediation": "Deploy Redis via docker-compose or Helm chart. Add connection retry and circuit-breaker logic to the Redis client."
+    },
+    {
+      "id": "INC-008",
+      "type": "OOM",
+      "service": "checkout-service",
+      "description": "Memory spike detected: peak 512Mi (100% of limit) 10 minutes before pod kill.",
+      "expected_symptoms": "Prometheus shows memory grew from 180Mi → 512Mi over 30 minutes. OOMKilled at T-0.",
+      "expected_root_cause": "SessionCache.loadAll() in commit a1b2c3d4e5f6 loads all rows from cart_sessions without pagination or eviction.",
+      "expected_commit_sha": "a1b2c3d4e5f6",
+      "expected_remediation": "Implement query pagination (LIMIT/OFFSET) and an LRU cache with max size. Consider using an external cache (Redis)."
+    },
+    {
+      "id": "INC-009",
+      "type": "POD_CRASH",
+      "service": "api-server",
+      "description": "API server pod in CrashLoopBackOff with 7 restarts.",
+      "expected_symptoms": "Exit code 1. CPU and memory normal — crash is not resource-related. Logs indicate dependency failure.",
+      "expected_root_cause": "The api-server was refactored to use Redis (PR #251) but Redis was never deployed. No graceful degradation.",
+      "expected_commit_sha": "7g8h9i0j1k2l",
+      "expected_remediation": "Deploy Redis as a sidecar or separate service. Add a health check for Redis connectivity. Add fallback to in-memory cache."
+    },
+    {
+      "id": "INC-010",
+      "type": "HIGH_ERROR_RATE",
+      "service": "api-server",
+      "description": "100% error rate on api-server — 890 out of 890 requests failed.",
+      "expected_symptoms": "All requests returning 5xx. Pod crashing on startup — never reaches Ready state.",
+      "expected_root_cause": "Hard dependency on Redis introduced without deployment. Service cannot start, so all requests hit the load balancer's default 503.",
+      "expected_commit_sha": "7g8h9i0j1k2l",
+      "expected_remediation": "Rollback to the previous version. Deploy Redis before re-deploying the new api-server."
+    }
+  ]
+  
