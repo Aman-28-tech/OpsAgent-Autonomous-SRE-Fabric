@@ -1,0 +1,120 @@
+openapi: "3.1.0"
+info:
+  title: Kubernetes MCP Server
+  version: "1.0.0"
+  description: >
+    Model Context Protocol server for Kubernetes cluster operations.
+    Exposes pod status, container logs, and deployment management as
+    discoverable MCP tools.
+  contact:
+    name: OpsAgent Team
+
+servers:
+  - url: http://localhost:8001
+    description: Local development
+  - url: http://k8s-mcp:8000
+    description: Docker Compose internal
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      operationId: healthCheck
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /mcp/tools/list:
+    get:
+      summary: Discover available tools
+      operationId: listTools
+      description: Returns every tool this MCP server exposes, including parameter schemas.
+      responses:
+        "200":
+          description: List of tool definitions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ToolDefinition"
+
+  /mcp/tools/call:
+    post:
+      summary: Execute a tool
+      operationId: callTool
+      description: Invokes a registered tool with the provided arguments.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ToolCallRequest"
+      responses:
+        "200":
+          description: Tool executed successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolCallResponse"
+        "404":
+          description: Tool not found
+        "500":
+          description: Tool execution error
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: healthy
+        service:
+          type: string
+          example: k8s-mcp
+        mode:
+          type: string
+          enum: [mock, live]
+
+    ToolDefinition:
+      type: object
+      required: [name, description]
+      properties:
+        name:
+          type: string
+          example: get_pod_status
+        description:
+          type: string
+        parameters:
+          type: object
+
+    ToolCallRequest:
+      type: object
+      required: [tool]
+      properties:
+        tool:
+          type: string
+          example: get_pod_status
+        arguments:
+          type: object
+          example:
+            service: checkout-service
+
+    ToolCallResponse:
+      type: object
+      properties:
+        tool:
+          type: string
+        result:
+          type: object
+        timestamp:
+          type: string
+          format: date-time
+        latency_ms:
+          type: number
+          format: double

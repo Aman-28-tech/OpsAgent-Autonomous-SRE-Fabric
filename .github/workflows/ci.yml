@@ -1,0 +1,153 @@
+name: OpsAgent CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────
+  # 1. Lint & Unit Tests
+  # ──────────────────────────────────────────────────────────────────
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ops-agent/agent
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio httpx
+
+      - name: Run unit tests
+        run: pytest tests/ -v --tb=short
+
+  # ──────────────────────────────────────────────────────────────────
+  # 2. Build & Integration Test (Docker Compose)
+  # ──────────────────────────────────────────────────────────────────
+  integration:
+    name: Integration Test
+    runs-on: ubuntu-latest
+    needs: test
+    defaults:
+      run:
+        working-directory: ops-agent
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker Compose stack
+        run: docker compose build
+
+      - name: Start services
+        run: docker compose up -d
+
+      - name: Wait for services to become healthy
+        run: |
+          echo "Waiting for services to start..."
+          sleep 20
+          # Health checks — core services
+          curl -sf http://localhost:8001/health || (echo "K8s MCP unhealthy" && exit 1)
+          curl -sf http://localhost:8002/health || (echo "Prom MCP unhealthy" && exit 1)
+          curl -sf http://localhost:8003/health || (echo "GitHub MCP unhealthy" && exit 1)
+          curl -sf http://localhost:8004/health || (echo "Jira MCP unhealthy" && exit 1)
+          curl -sf http://localhost:8010/health || (echo "Auth unhealthy" && exit 1)
+          curl -sf http://localhost:8000/health || (echo "Agent unhealthy" && exit 1)
+          echo "All services healthy ✅"
+
+      - name: Test MCP tool discovery
+        run: |
+          echo "--- K8s tools ---"
+          curl -sf http://localhost:8001/mcp/tools/list | python3 -m json.tool
+          echo "--- Prometheus tools ---"
+          curl -sf http://localhost:8002/mcp/tools/list | python3 -m json.tool
+          echo "--- GitHub tools ---"
+          curl -sf http://localhost:8003/mcp/tools/list | python3 -m json.tool
+          echo "--- Jira tools ---"
+          curl -sf http://localhost:8004/mcp/tools/list | python3 -m json.tool
+
+      - name: Test JWT auth flow
+        run: |
+          echo "--- Request JWT token ---"
+          TOKEN=$(curl -sf -X POST http://localhost:8010/auth/token \
+            -H "Content-Type: application/json" \
+            -d '{"client_id":"ci-test","scope":"k8s-mcp"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+          echo "Token obtained: ${TOKEN:0:20}..."
+          echo "--- Verify token ---"
+          curl -sf -X POST http://localhost:8010/auth/verify \
+            -H "Content-Type: application/json" \
+            -d "{\"token\":\"$TOKEN\",\"required_scope\":\"k8s-mcp\"}" | python3 -m json.tool
+
+      - name: Test Prometheus metrics endpoint
+        run: |
+          curl -sf http://localhost:8000/metrics/prometheus | head -20
+
+      - name: Fire synthetic alert
+        run: |
+          curl -sf -X POST http://localhost:8000/alert \
+            -H "Content-Type: application/json" \
+            -d '{"type":"OOM","service":"checkout-service","description":"CI test alert"}'
+
+      - name: Collect logs
+        if: always()
+        run: docker compose logs --tail=50
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
+
+  # ──────────────────────────────────────────────────────────────────
+  # 3. LLM Evaluation Quality Gate
+  # ──────────────────────────────────────────────────────────────────
+  evaluate:
+    name: LLM Quality Gate
+    runs-on: ubuntu-latest
+    needs: test
+    defaults:
+      run:
+        working-directory: ops-agent
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Run LLM evaluation pipeline
+        id: eval
+        run: |
+          python evaluation/eval.py --threshold 0.90 | tee eval_output.txt
+          SCORE=$(grep "OverallScore" eval_output.txt | awk '{print $2}')
+          echo "score=$SCORE" >> $GITHUB_OUTPUT
+
+      - name: Upload evaluation results
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: ops-agent/evaluation/eval_results.csv
+
+      - name: Enforce quality gate
+        run: |
+          SCORE="${{ steps.eval.outputs.score }}"
+          echo "LLM Evaluation Score: $SCORE"
+          python3 -c "
+          score = float('$SCORE')
+          if score < 0.90:
+              print('❌ BLOCKED — LLM accuracy', score, '< 0.90')
+              exit(1)
+          print('✅ PASSED — LLM accuracy', score, '>= 0.90')
+          "

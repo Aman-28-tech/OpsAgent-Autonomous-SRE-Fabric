@@ -1,0 +1,7 @@
+fastapi==0.115.6
+uvicorn==0.34.0
+pydantic==2.10.4
+# -- Live K8s cluster support -----------------------------------------------
+kubernetes==31.0.0
+# -- JWT authentication ------------------------------------------------------
+PyJWT==2.10.1
